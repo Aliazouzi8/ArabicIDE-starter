@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ArabicIDE Editor</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; overflow: hidden; }
+  #editor { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+  #fallback {
+    display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    box-sizing: border-box; width: 100%; height: 100%; margin: 0; border: 0;
+    padding: 12px; outline: none; resize: none; background: #1e1e1e; color: #d4d4d4;
+    font-family: monospace; font-size: 15px; line-height: 1.5;
+    direction: ltr; text-align: left; white-space: pre; overflow: auto; tab-size: 4;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #boot {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #8a8a8a; font: 14px sans-serif; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<textarea id="fallback" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+<div id="boot">Loading editor…</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // كل الملفات محلية: .../assets/editor/vs (بدون CDN)
+  var BASE = new URL('./', location.href).href;
+  var VS = BASE + 'vs';
+
+  var options = { fontSize: 15, wordWrap: false };
+  var backend = null;
+  var settled = false;
+  var timers = {};
+
+  // الاتصال بـKotlin: رسائل JSON بأنواع محددة فقط
+  function send(obj) {
+    try {
+      if (window.ArabicIDE) { window.ArabicIDE.postMessage(JSON.stringify(obj)); }
+    } catch (e) { /* تجاهل */ }
+  }
+  function log(msg) { send({ type: 'log', message: String(msg) }); }
+
+  function queueChange(path, read) {
+    clearTimeout(timers[path]);
+    timers[path] = setTimeout(function () {
+      send({ type: 'changed', path: path, text: read() });
+    }, 250);
+  }
+
+  window.addEventListener('error', function (e) {
+    log('JS error: ' + e.message + ' (' + String(e.filename || '').split('/').pop() + ':' + e.lineno + ')');
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    log('Promise rejected: ' + (r && r.message ? r.message : r));
+  });
+
+  // ---------------------------------------------------------------- Monaco
+  function startMonaco() {
+    require.config({ paths: { vs: VS } });
+
+    require(['vs/editor/editor.main'], function () {
+      if (settled) { return; }
+      settled = true;
+      document.getElementById('boot').style.display = 'none';
+
+      var editor = monaco.editor.create(document.getElementById('editor'), {
+        value: '',
+        language: 'plaintext',
+        theme: 'vs-dark',
+        automaticLayout: true,
+        fontSize: options.fontSize,
+        wordWrap: options.wordWrap ? 'on' : 'off',
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        contextmenu: false,
+        tabSize: 4,
+        insertSpaces: true,
+        renderWhitespace: 'selection',
+        padding: { top: 8, bottom: 8 },
+        lineNumbersMinChars: 3,
+        fixedOverflowWidgets: true,
+        acceptSuggestionOnEnter: 'off',
+        unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false }
+      });
+
+      var models = Object.create(null);
+      var states = Object.create(null);
+      var activePath = null;
+      var cursorPending = false;
+
+      function reportCursor() {
+        if (cursorPending) { return; }
+        cursorPending = true;
+        requestAnimationFrame(function () {
+          cursorPending = false;
+          var p = editor.getPosition();
+          var m = editor.getModel();
+          send({
+            type: 'cursor',
+            line: p ? p.lineNumber : 1,
+            col: p ? p.column : 1,
+            lang: m ? m.getLanguageId() : ''
+          });
+        });
+      }
+      editor.onDidChangeCursorPosition(reportCursor);
+
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
+        send({ type: 'save' });
+      });
+
+      // أسماء الأوامر القادمة من أزرار Kotlin ← أوامر Monaco
+      var COMMANDS = {
+        undo: 'undo', redo: 'redo', tab: 'tab', outdent: 'outdent',
+        left: 'cursorLeft', right: 'cursorRight', up: 'cursorUp', down: 'cursorDown',
+        home: 'cursorHome', end: 'cursorEnd',
+        find: 'actions.find', comment: 'editor.action.commentLine',
+        format: 'editor.action.formatDocument', gotoLine: 'editor.action.gotoLine'
+      };
+
+      backend = {
+        show: function (path, text) {
+          var m = models[path];
+          if (!m) {
+            m = monaco.editor.createModel(text, undefined, monaco.Uri.file('/' + path));
+            models[path] = m;
+            m.onDidChangeContent(function () {
+              queueChange(path, function () { return m.getValue(); });
+            });
+          }
+          if (activePath && activePath !== path && models[activePath]) {
+            states[activePath] = editor.saveViewState();
+          }
+          activePath = path;
+          editor.setModel(m);
+          if (states[path]) { editor.restoreViewState(states[path]); }
+          reportCursor();
+        },
+        drop: function (path) {
+          var m = models[path];
+          if (!m) { return; }
+          if (activePath === path) { editor.setModel(null); activePath = null; }
+          m.dispose();
+          delete models[path];
+          delete states[path];
+        },
+        getText: function (path) {
+          var m = models[path];
+          return m ? m.getValue() : null;
+        },
+        options: function (o) {
+          editor.updateOptions({ fontSize: o.fontSize, wordWrap: o.wordWrap ? 'on' : 'off' });
+        },
+        cmd: function (name) {
+          var id = COMMANDS[name];
+          if (!id) { return; }
+          editor.focus();
+          editor.trigger('arabicide', id, null);
+        },
+        insert: function (text) {
+          editor.focus();
+          editor.trigger('keyboard', 'type', { text: text });
+        }
+      };
+
+      send({ type: 'ready', backend: 'monaco' });
+    }, function (err) {
+      if (settled) { return; }
+      settled = true;
+      startFallback('تعذر تحميل وحدات Monaco: ' + (err && err.message ? err.message : err));
+    });
+  }
+
+  // ----------------------------------------------- محرر نصي بديل عند الفشل
+  function startFallback(reason) {
+    document.getElementById('boot').style.display = 'none';
+    document.getElementById('editor').style.display = 'none';
+    var ta = document.getElementById('fallback');
+    ta.style.display = 'block';
+    ta.style.fontSize = options.fontSize + 'px';
+    ta.style.whiteSpace = options.wordWrap ? 'pre-wrap' : 'pre';
+
+    var texts = Object.create(null);
+    var active = null;
+    var cursorPending = false;
+
+    function reportCursor() {
+      if (cursorPending) { return; }
+      cursorPending = true;
+      requestAnimationFrame(function () {
+        cursorPending = false;
+        var before = ta.value.slice(0, ta.selectionStart).split('\n');
+        send({ type: 'cursor', line: before.length, col: before[before.length - 1].length + 1, lang: 'plaintext' });
+      });
+    }
+
+    ta.addEventListener('input', function () {
+      if (active === null) { return; }
+      var p = active;
+      texts[p] = ta.value;
+      queueChange(p, function () { return texts[p]; });
+    });
+    ta.addEventListener('keyup', reportCursor);
+    ta.addEventListener('click', reportCursor);
+
+    backend = {
+      show: function (path, text) {
+        if (active !== null) { texts[active] = ta.value; }
+        if (!(path in texts)) { texts[path] = text; }
+        active = path;
+        ta.value = texts[path];
+        reportCursor();
+      },
+      drop: function (path) {
+        delete texts[path];
+        if (active === path) { active = null; ta.value = ''; }
+      },
+      getText: function (path) {
+        if (path === active) { texts[path] = ta.value; }
+        return (path in texts) ? texts[path] : null;
+      },
+      options: function (o) {
+        ta.style.fontSize = o.fontSize + 'px';
+        ta.style.whiteSpace = o.wordWrap ? 'pre-wrap' : 'pre';
+      },
+      cmd: function (name) {
+        ta.focus();
+        if (name === 'undo') { document.execCommand('undo'); }
+        else if (name === 'redo') { document.execCommand('redo'); }
+        else if (name === 'tab') { document.execCommand('insertText', false, '    '); }
+      },
+      insert: function (text) {
+        ta.focus();
+        document.execCommand('insertText', false, text);
+      }
+    };
+
+    send({ type: 'ready', backend: 'textarea', reason: reason });
+  }
+
+  // ------------------------------------------------ الواجهة التي يستدعيها Kotlin
+  window.ArabicIDEEditor = {
+    show: function (path, text) { if (backend) { backend.show(path, text); } },
+    drop: function (path) { if (backend) { backend.drop(path); } },
+    getText: function (path) { return backend ? backend.getText(path) : null; },
+    options: function (o) { options = o; if (backend) { backend.options(o); } },
+    cmd: function (name) { if (backend) { backend.cmd(name); } },
+    insert: function (text) { if (backend) { backend.insert(text); } }
+  };
+
+  // تحميل loader.js المحلي ثم بدء Monaco
+  var loader = document.createElement('script');
+  loader.src = 'vs/loader.js';
+  loader.onload = startMonaco;
+  loader.onerror = function () {
+    if (settled) { return; }
+    settled = true;
+    startFallback('ملف vs/loader.js غير موجود داخل assets/editor');
+  };
+  document.head.appendChild(loader);
+
+  // مهلة أمان: إذا لم يكتمل التحميل نستخدم المحرر البديل
+  setTimeout(function () {
+    if (settled) { return; }
+    settled = true;
+    startFallback('انتهت مهلة تحميل Monaco (25 ثانية)');
+  }, 25000);
+})();
+</script>
+</body>
+</html>
