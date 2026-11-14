@@ -43,7 +43,6 @@ object ScriptBuilder {
             "sh", "bash" -> "bash $q"
             "rb" -> "ruby $q"
             "php" -> "php $q"
-            "lua" -> "lua $q"
             "pl" -> "perl $q"
             "go" -> "go run $q"
             "java" -> "java $q"
@@ -61,7 +60,6 @@ object ScriptBuilder {
         "npm" to "nodejs",
         "ruby" to "ruby",
         "php" to "php",
-        "lua" to "lua54",
         "perl" to "perl",
         "go" to "golang",
         "java" to "openjdk-17",

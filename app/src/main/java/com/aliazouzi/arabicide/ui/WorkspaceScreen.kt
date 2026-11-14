@@ -1,6 +1,7 @@
 package com.aliazouzi.arabicide.ui
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -40,10 +41,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatAlignLeft
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -67,6 +70,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -99,12 +103,14 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aliazouzi.arabicide.OpenTab
 import com.aliazouzi.arabicide.PanelMode
 import com.aliazouzi.arabicide.WorkspaceViewModel
+import com.aliazouzi.arabicide.diagnostics.CrashLogger
 import com.aliazouzi.arabicide.editor.EditorView
 import com.aliazouzi.arabicide.termux.TermuxRunner
 import com.aliazouzi.arabicide.termux.TermuxStatus
@@ -138,8 +144,24 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
 
     var dialog by remember { mutableStateOf<Dlg?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    var showGuide by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    var reportText by remember { mutableStateOf("") }
     var commandFocused by remember { mutableStateOf(false) }
     var termuxStatus by remember { mutableStateOf(TermuxRunner.status(context)) }
+
+    fun openDiagnostics() {
+        reportText = CrashLogger.buildReport(
+            context,
+            extra = listOf(
+                "Project: " + vm.project,
+                "Open tabs: " + vm.tabs.size,
+                "Termux status: " + termuxStatus,
+            ),
+            editorLog = vm.editorLog.toList(),
+        )
+        showDiagnostics = true
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -168,6 +190,17 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { termuxStatus = TermuxRunner.status(context) }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.onAppStopped() }
+
+    // أول تشغيل: يظهر دليل ربط Termux مرة واحدة إن لم يكن الربط جاهزاً
+    LaunchedEffect(Unit) {
+        if (!vm.guideSeen && termuxStatus != TermuxStatus.READY) showGuide = true
+        vm.markGuideSeen()
+    }
+
+    // تعطل حدث في تشغيل سابق: نعرض التقرير مباشرة لإرساله للمطور
+    LaunchedEffect(Unit) {
+        if (CrashLogger.hasPendingCrash(context)) openDiagnostics()
+    }
 
     val msg = vm.message
     LaunchedEffect(msg) {
@@ -256,6 +289,8 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
                     onGoToLine = { vm.editorCmd("gotoLine") },
                     onProjects = { dialog = Dlg.Projects },
                     onSettings = { showSettings = true },
+                    onTermuxGuide = { showGuide = true },
+                    onDiagnostics = { openDiagnostics() },
                 )
 
                 if (vm.tabs.isNotEmpty()) {
@@ -280,6 +315,14 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
                                 FallbackBanner(Modifier.align(Alignment.TopCenter)) { showSettings = true }
                             }
                             if (!controller.ready) LoadingOverlay()
+                            if (!imeVisible && vm.tabs.isNotEmpty() && controller.ready) {
+                                SmallFloatingActionButton(
+                                    onClick = vm::focusEditor,
+                                    modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                                    containerColor = IdeColors.SurfaceHigh,
+                                    contentColor = IdeColors.TextPrimary,
+                                ) { Icon(Icons.Filled.Keyboard, contentDescription = "إظهار لوحة المفاتيح") }
+                            }
                             if (vm.tabs.isEmpty()) {
                                 EmptyState(
                                     onOpenExplorer = { scope.launch { drawerState.open() } },
@@ -304,6 +347,7 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
                                 onCancel = vm::cancelEntry,
                                 onGrantPermission = { permissionLauncher.launch(TermuxRunner.PERMISSION) },
                                 onOpenInstallPage = { openUrl(context, "https://f-droid.org/packages/com.termux/") },
+                                onHelp = { showGuide = true },
                                 onInputFocus = { commandFocused = it },
                                 modifier = Modifier.height(panelHeight),
                             )
@@ -321,6 +365,7 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
                     col = controller.cursorCol,
                     lang = controller.languageLabel,
                     termux = termuxStatus,
+                    onTermuxClick = { showGuide = true },
                 )
             }
 
@@ -399,6 +444,42 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
         )
     }
 
+    if (showGuide) {
+        TermuxGuideSheet(
+            status = termuxStatus,
+            onCopy = { text -> clipboard.setText(AnnotatedString(text)) },
+            onOpenTermux = { openTermux(context) },
+            onOpenInstallPage = { openUrl(context, "https://f-droid.org/packages/com.termux/") },
+            onGrantPermission = { permissionLauncher.launch(TermuxRunner.PERMISSION) },
+            onRunTest = {
+                showGuide = false
+                vm.runCommand("echo ArabicIDE-OK")
+            },
+            onDismiss = { showGuide = false },
+        )
+    }
+
+    if (showDiagnostics) {
+        DiagnosticsSheet(
+            report = reportText.takeLast(30_000),
+            hasCrash = CrashLogger.hasPendingCrash(context),
+            onShare = { shareReport(context, reportText) },
+            onCopy = {
+                clipboard.setText(AnnotatedString(reportText))
+                vm.showMessage("نُسخ التقرير")
+            },
+            onClear = {
+                CrashLogger.clear(context)
+                vm.clearEditorLog()
+                openDiagnostics()
+            },
+            onDismiss = {
+                CrashLogger.acknowledge(context)
+                showDiagnostics = false
+            },
+        )
+    }
+
     if (showSettings) {
         SettingsSheet(
             fontSize = vm.fontSize,
@@ -416,6 +497,32 @@ fun WorkspaceScreen(vm: WorkspaceViewModel = viewModel()) {
             onClearLog = vm::clearEditorLog,
             onDismiss = { showSettings = false },
         )
+    }
+}
+
+private fun shareReport(context: Context, report: String) {
+    try {
+        val file = CrashLogger.writeReportFile(context, report)
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".logs", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "ArabicIDE error report")
+            clipData = ClipData.newRawUri("report", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(send, "إرسال التقرير"))
+    } catch (e: Exception) {
+        CrashLogger.recordError(context, "share", e)
+    }
+}
+
+private fun openTermux(context: Context) {
+    try {
+        val intent = context.packageManager.getLaunchIntentForPackage(TermuxRunner.PACKAGE)
+        if (intent != null) context.startActivity(intent)
+    } catch (e: Exception) {
+        // تعذر فتح Termux
     }
 }
 
@@ -445,6 +552,8 @@ private fun TopBar(
     onGoToLine: () -> Unit,
     onProjects: () -> Unit,
     onSettings: () -> Unit,
+    onTermuxGuide: () -> Unit,
+    onDiagnostics: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -517,6 +626,14 @@ private fun TopBar(
                     MenuItem("المشاريع", Icons.Filled.Folder) {
                         menuOpen = false
                         onProjects()
+                    }
+                    MenuItem("ربط Termux وأوامر التثبيت", Icons.Filled.Terminal) {
+                        menuOpen = false
+                        onTermuxGuide()
+                    }
+                    MenuItem("تقرير الأخطاء", Icons.Filled.BugReport) {
+                        menuOpen = false
+                        onDiagnostics()
                     }
                     MenuItem("الإعدادات", Icons.Filled.Settings) {
                         menuOpen = false
@@ -668,6 +785,7 @@ private fun StatusBar(
     col: Int,
     lang: String,
     termux: TermuxStatus,
+    onTermuxClick: () -> Unit,
 ) {
     Row(
         Modifier
@@ -707,7 +825,12 @@ private fun StatusBar(
                 ),
         )
         Spacer(Modifier.width(6.dp))
-        Text("Termux", color = IdeColors.TextSecondary, fontSize = 11.sp)
+        Text(
+            "Termux",
+            modifier = Modifier.clickable(onClick = onTermuxClick).padding(horizontal = 4.dp, vertical = 4.dp),
+            color = IdeColors.TextSecondary,
+            fontSize = 11.sp,
+        )
     }
 }
 

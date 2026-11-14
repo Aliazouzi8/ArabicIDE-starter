@@ -39,6 +39,7 @@
   var backend = null;
   var settled = false;
   var timers = {};
+  var layoutFn = null;
 
   // الاتصال بـKotlin: رسائل JSON بأنواع محددة فقط
   function send(obj) {
@@ -76,7 +77,7 @@
         value: '',
         language: 'plaintext',
         theme: 'vs-dark',
-        automaticLayout: true,
+        automaticLayout: false,
         fontSize: options.fontSize,
         wordWrap: options.wordWrap ? 'on' : 'off',
         minimap: { enabled: false },
@@ -113,6 +114,8 @@
         });
       }
       editor.onDidChangeCursorPosition(reportCursor);
+      editor.onDidFocusEditorText(function () { send({ type: 'focus', focused: true }); });
+      editor.onDidBlurEditorText(function () { send({ type: 'focus', focused: false }); });
 
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
         send({ type: 'save' });
@@ -142,7 +145,12 @@
           }
           activePath = path;
           editor.setModel(m);
-          if (states[path]) { editor.restoreViewState(states[path]); }
+          if (states[path]) {
+            editor.restoreViewState(states[path]);
+          } else {
+            editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+          }
+          if (layoutFn) { layoutFn(false); }
           reportCursor();
         },
         drop: function (path) {
@@ -171,6 +179,28 @@
           editor.trigger('keyboard', 'type', { text: text });
         }
       };
+
+      backend.focus = function () { editor.focus(); };
+
+      // تخطيط صريح بالبكسل: لا نعتمد على ResizeObserver وحده (قد يتأخر داخل WebView)
+      var lastW = -1, lastH = -1;
+      layoutFn = function (force) {
+        var w = document.documentElement.clientWidth || window.innerWidth || 0;
+        var h = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!force && w === lastW && h === lastH) { return; }
+        lastW = w; lastH = h;
+        var el = document.getElementById('editor');
+        el.style.width = w + 'px';
+        el.style.height = h + 'px';
+        if (w > 0 && h > 0) { editor.layout({ width: w, height: h }); }
+      };
+      window.addEventListener('resize', function () { layoutFn(false); });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', function () { layoutFn(false); });
+      }
+      setInterval(function () { layoutFn(false); }, 400);
+      layoutFn(true);
+      log('layout ' + lastW + 'x' + lastH + ' dpr=' + window.devicePixelRatio);
 
       send({ type: 'ready', backend: 'monaco' });
     }, function (err) {
@@ -241,7 +271,8 @@
       insert: function (text) {
         ta.focus();
         document.execCommand('insertText', false, text);
-      }
+      },
+      focus: function () { ta.focus(); }
     };
 
     send({ type: 'ready', backend: 'textarea', reason: reason });
@@ -254,7 +285,9 @@
     getText: function (path) { return backend ? backend.getText(path) : null; },
     options: function (o) { options = o; if (backend) { backend.options(o); } },
     cmd: function (name) { if (backend) { backend.cmd(name); } },
-    insert: function (text) { if (backend) { backend.insert(text); } }
+    insert: function (text) { if (backend) { backend.insert(text); } },
+    layout: function () { if (layoutFn) { layoutFn(true); } },
+    focus: function () { if (backend && backend.focus) { backend.focus(); } }
   };
 
   // تحميل loader.js المحلي ثم بدء Monaco

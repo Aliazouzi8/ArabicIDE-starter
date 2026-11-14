@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aliazouzi.arabicide.data.ProjectRepository
+import com.aliazouzi.arabicide.diagnostics.CrashLogger
 import com.aliazouzi.arabicide.data.ReadResult
 import com.aliazouzi.arabicide.data.SettingsStore
 import com.aliazouzi.arabicide.data.TreeRow
@@ -84,13 +85,19 @@ class WorkspaceViewModel(app: Application) : AndroidViewModel(app) {
         private set
     val editorLog = mutableStateListOf<String>()
 
+    /** هل ظهر دليل ربط Termux من قبل؟ */
+    val guideSeen: Boolean = store.guideSeen
+
     private val autoSaveJobs = mutableMapOf<String, Job>()
     private var nextExecId = 1L
 
     init {
         controller.onChanged = { path, text -> onEditorChanged(path, text) }
         controller.onSaveRequested = { saveActive() }
-        controller.onLog = { addEditorLog(it) }
+        controller.onLog = {
+            addEditorLog(it)
+            CrashLogger.log(getApplication(), "editor", it)
+        }
 
         repo.ensureDefaultProject()
         projects = repo.listProjects()
@@ -106,6 +113,10 @@ class WorkspaceViewModel(app: Application) : AndroidViewModel(app) {
     private fun parentsOf(path: String): List<String> {
         val parts = path.split('/')
         return (1 until parts.size).map { parts.take(it).joinToString("/") }
+    }
+
+    fun markGuideSeen() {
+        store.guideSeen = true
     }
 
     fun showMessage(text: String) {
@@ -327,7 +338,12 @@ class WorkspaceViewModel(app: Application) : AndroidViewModel(app) {
         val text = tab.text
         val proj = project
         val ok = withContext(Dispatchers.IO) { repo.write(proj, path, text) }
-        if (ok) markSaved(path, text) else showMessage("تعذر حفظ " + tab.name)
+        if (ok) {
+            markSaved(path, text)
+        } else {
+            showMessage("تعذر حفظ " + tab.name)
+            CrashLogger.log(getApplication(), "save", "failed: " + proj + "/" + path)
+        }
         return ok
     }
 
@@ -403,6 +419,8 @@ class WorkspaceViewModel(app: Application) : AndroidViewModel(app) {
     fun editorCmd(name: String) = controller.cmd(name)
 
     fun insertText(text: String) = controller.insert(text)
+
+    fun focusEditor() = controller.focusEditor()
 
     private fun addEditorLog(line: String) {
         editorLog.add(line)
@@ -512,6 +530,7 @@ class WorkspaceViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 TermuxRunner.send(ctx, id, built.first)
             } catch (e: Exception) {
+                CrashLogger.recordError(ctx, "termux", e)
                 updateEntry(id) {
                     it.copy(status = EntryStatus.DONE, note = "تعذر إرسال الأمر إلى Termux: " + e.message)
                 }

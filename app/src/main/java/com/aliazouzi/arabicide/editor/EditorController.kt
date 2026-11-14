@@ -1,5 +1,7 @@
 package com.aliazouzi.arabicide.editor
 
+import android.content.Context
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +58,7 @@ class EditorController {
                     languageLabel = o.optString("lang")
                 }
                 "save" -> onSaveRequested()
+                "focus" -> if (o.optBoolean("focused")) showKeyboard()
                 "log" -> onLog(o.optString("message"))
                 else -> onLog("رسالة من المحرر بنوع غير معروف")
             }
@@ -78,6 +81,25 @@ class EditorController {
 
     fun options(fontSize: Int, wordWrap: Boolean) =
         eval("ArabicIDEEditor.options({fontSize:" + fontSize + ",wordWrap:" + wordWrap + "})")
+
+    /** يعيد تخطيط المحرر بعد تغيّر حجم الـWebView. */
+    fun relayout() = eval("ArabicIDEEditor.layout()")
+
+    /** يركّز المحرر ويُظهر لوحة المفاتيح. */
+    fun focusEditor() {
+        val wv = webView ?: return
+        wv.requestFocus()
+        eval("ArabicIDEEditor.focus()")
+        showKeyboard()
+    }
+
+    private fun showKeyboard() {
+        val wv = webView ?: return
+        wv.post {
+            val imm = wv.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(wv, 0)
+        }
+    }
 
     fun cmd(name: String) {
         webView?.requestFocus()

@@ -31,6 +31,12 @@ class SettingsStore(context: Context) {
             prefs.edit().putString("last_project", value).apply()
         }
 
+    var guideSeen: Boolean
+        get() = prefs.getBoolean("guide_seen", false)
+        set(value) {
+            prefs.edit().putBoolean("guide_seen", value).apply()
+        }
+
     var openPaths: List<String>
         get() = (prefs.getString("open_paths", "") ?: "").split("\n").filter { it.isNotEmpty() }
         set(value) {

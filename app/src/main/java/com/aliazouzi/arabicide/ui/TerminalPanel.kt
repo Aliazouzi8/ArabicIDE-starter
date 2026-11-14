@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Terminal
@@ -89,6 +90,7 @@ fun TerminalPanel(
     onCancel: (Long) -> Unit,
     onGrantPermission: () -> Unit,
     onOpenInstallPage: () -> Unit,
+    onHelp: () -> Unit,
     onInputFocus: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -136,6 +138,7 @@ fun TerminalPanel(
                     ),
             )
             Spacer(Modifier.weight(1f))
+            PanelIcon(Icons.Filled.Info, "دليل ربط Termux", onHelp)
             PanelIcon(Icons.Filled.ContentCopy, "نسخ الناتج", onCopyAll)
             PanelIcon(Icons.Filled.DeleteSweep, "مسح", onClear)
             PanelIcon(
@@ -152,11 +155,13 @@ fun TerminalPanel(
                 "Termux غير مثبت على هذا الجهاز.",
                 "تثبيت من F-Droid",
                 onOpenInstallPage,
+                onHelp,
             )
             TermuxStatus.NO_PERMISSION -> Banner(
                 "يلزم منح ArabicIDE صلاحية تشغيل الأوامر في Termux.",
                 "منح الصلاحية",
                 onGrantPermission,
+                onHelp,
             )
             TermuxStatus.READY -> Unit
         }
@@ -240,7 +245,7 @@ private fun PanelIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Banner(text: String, action: String, onAction: () -> Unit) {
+private fun Banner(text: String, action: String, onAction: () -> Unit, onGuide: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -249,6 +254,7 @@ private fun Banner(text: String, action: String, onAction: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, Modifier.weight(1f), color = IdeColors.Yellow, fontSize = 12.sp)
+        TextButton(onClick = onGuide) { Text("الدليل") }
         TextButton(onClick = onAction) { Text(action) }
     }
 }

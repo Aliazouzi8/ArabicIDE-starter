@@ -3,6 +3,7 @@ package com.aliazouzi.arabicide.editor
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
@@ -62,6 +63,8 @@ private fun createEditorWebView(context: Context, controller: EditorController):
     s.textZoom = 100
     s.setSupportZoom(false)
     s.builtInZoomControls = false
+    s.useWideViewPort = true
+    s.loadWithOverviewMode = false
 
     view.webViewClient = object : WebViewClient() {
         override fun shouldInterceptRequest(
@@ -95,6 +98,24 @@ private fun createEditorWebView(context: Context, controller: EditorController):
         controller.onLog("هذا الـWebView لا يدعم WebMessageListener. حدّث Android System WebView.")
     }
 
-    view.loadUrl("$APP_ORIGIN/assets/editor/index.html")
+    // أهم نقطة: لا نحمّل الصفحة قبل أن يصبح للـWebView حجم فعلي، وإلا يُنشأ Monaco بمساحة صغيرة جداً.
+    view.isFocusable = true
+    view.isFocusableInTouchMode = true
+    view.setOnTouchListener { v, ev ->
+        if (ev.action == MotionEvent.ACTION_DOWN) v.requestFocus()
+        false
+    }
+
+    var loaded = false
+    view.addOnLayoutChangeListener { v, left, top, right, bottom, _, _, _, _ ->
+        if (right - left > 0 && bottom - top > 0) {
+            if (!loaded) {
+                loaded = true
+                (v as WebView).loadUrl("$APP_ORIGIN/assets/editor/index.html")
+            } else {
+                controller.relayout()
+            }
+        }
+    }
     return view
 }

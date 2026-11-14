@@ -82,7 +82,7 @@ fun SettingsSheet(
                 else -> "قيد التحميل"
             }
             Text("المحرر: $editorName", style = MaterialTheme.typography.bodyMedium)
-            Text("الإصدار 0.2.0", style = MaterialTheme.typography.bodySmall, color = IdeColors.TextSecondary)
+            Text("الإصدار 0.2.2", style = MaterialTheme.typography.bodySmall, color = IdeColors.TextSecondary)
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = IdeColors.Border)
 

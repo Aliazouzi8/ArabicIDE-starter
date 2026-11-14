@@ -12,8 +12,19 @@ android {
         applicationId = "com.aliazouzi.arabicide"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.2.2"
+    }
+
+    signingConfigs {
+        // مفتاح debug ثابت داخل المستودع، حتى يبقى التوقيع نفسه بين عمليات
+        // البناء على GitHub Actions ويقبل الهاتف التحديث عبر adb install -r
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
